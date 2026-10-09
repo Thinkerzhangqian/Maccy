@@ -1,0 +1,71 @@
+name: Build macOS App
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - "Maccy/**"
+      - "Maccy.xcodeproj/**"
+      - ".github/workflows/build-macos.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build universal Release app
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project Maccy.xcodeproj \
+            -scheme Maccy \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath build \
+            -disableAutomaticPackageResolution \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            build
+
+      - name: Ad-hoc sign and verify app
+        run: |
+          set -euo pipefail
+          APP="build/Build/Products/Release/Maccy.app"
+          test -x "$APP/Contents/MacOS/Maccy"
+          lipo -verify_arch arm64 x86_64 "$APP/Contents/MacOS/Maccy"
+          plutil -lint "$APP/Contents/Info.plist"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+      - name: Package app
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/Build/Products/Release/Maccy.app \
+            dist/Maccy-macOS-universal.zip
+          shasum -a 256 dist/Maccy-macOS-universal.zip \
+            > dist/Maccy-macOS-universal.zip.sha256
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Maccy-macOS-universal
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
